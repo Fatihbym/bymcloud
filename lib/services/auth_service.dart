@@ -30,6 +30,7 @@ class AuthService {
       try {
         final cookieManager = CookieManager.instance();
         final url = WebUri(domainUrl);
+        final host = url.host.isEmpty ? "bymcloud.app" : url.host;
         final parts = cookieStr.split(';');
         for (var part in parts) {
           final trimmed = part.trim();
@@ -43,8 +44,20 @@ class AuthService {
                 url: url,
                 name: name,
                 value: value,
+                domain: host,
+                path: "/",
                 isSecure: true,
               );
+              if (!host.startsWith('.')) {
+                await cookieManager.setCookie(
+                  url: url,
+                  name: name,
+                  value: value,
+                  domain: ".$host",
+                  path: "/",
+                  isSecure: true,
+                );
+              }
             }
           }
         }

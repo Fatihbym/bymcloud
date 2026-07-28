@@ -43,30 +43,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
   late PullToRefreshController pullToRefreshController;
 
   void _syncCookies() async {
-    final cookieStr = AuthService().sessionCookie;
-    if (cookieStr != null && cookieStr.isNotEmpty) {
-      final cookieManager = CookieManager.instance();
-      final url = WebUri(widget.initialUrl ?? "https://bymcloud.app/");
-      final parts = cookieStr.split(';');
-      
-      for (var part in parts) {
-        final trimmed = part.trim();
-        if (trimmed.isEmpty) continue;
-        final eqIndex = trimmed.indexOf('=');
-        if (eqIndex != -1) {
-          final name = trimmed.substring(0, eqIndex).trim();
-          final value = trimmed.substring(eqIndex + 1).trim();
-          if (name.isNotEmpty && !['expires', 'path', 'domain', 'max-age', 'secure', 'httponly', 'samesite'].contains(name.toLowerCase())) {
-            await cookieManager.setCookie(
-              url: url,
-              name: name,
-              value: value,
-              isSecure: true,
-            );
-          }
-        }
-      }
-    }
+    await AuthService().syncCookiesToWebView(widget.initialUrl ?? "https://bymcloud.app/");
   }
 
   @override
@@ -103,7 +80,8 @@ class _WebViewScreenState extends State<WebViewScreen> {
     });
 
     _connectivitySubscription = Connectivity().onConnectivityChanged.listen((List<ConnectivityResult> results) {
-      final hasInternet = !results.contains(ConnectivityResult.none);
+      final hasNoInternet = results.length == 1 && results.first == ConnectivityResult.none;
+      final hasInternet = !hasNoInternet;
       if (mounted && _hasInternet != hasInternet) {
         setState(() {
           _hasInternet = hasInternet;
@@ -112,11 +90,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
           _reloadPage();
         }
       }
-    });
-
-    Connectivity().checkConnectivity().then((results) {
-      final hasInternet = !results.contains(ConnectivityResult.none);
-      if (mounted) setState(() => _hasInternet = hasInternet);
     });
   }
 
@@ -266,11 +239,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
     } catch (e) {
       debugPrint("Cookie delete error: $e");
     }
-    try {
-      await InAppWebViewController.clearAllCache();
-    } catch (e) {
-      debugPrint("Webview cache clear error: $e");
-    }
     await AuthService().logout();
     if (mounted) {
       Navigator.of(context).pushReplacement(
@@ -404,6 +372,20 @@ class _WebViewScreenState extends State<WebViewScreen> {
                   final url = navigationAction.request.url;
                   if (_isLoginOrLogoutUrl(url)) {
                     if (!_isLoggingOut) {
+                      if (_isFirstLoad && AuthService().sessionCookie != null && AuthService().sessionCookie!.isNotEmpty) {
+                        await AuthService().syncCookiesToWebView("https://bymcloud.app/");
+                        if (widget.initialUrl != null) {
+                          controller.loadUrl(
+                            urlRequest: URLRequest(
+                              url: WebUri(widget.initialUrl!),
+                              headers: {
+                                'Cookie': AuthService().sessionCookie!,
+                              },
+                            ),
+                          );
+                          return NavigationActionPolicy.CANCEL;
+                        }
+                      }
                       _triggerNativeLogout();
                     }
                     return NavigationActionPolicy.CANCEL;
@@ -593,13 +575,27 @@ class _WebViewScreenState extends State<WebViewScreen> {
                 },
                 onReceivedError: (controller, request, error) {
                   pullToRefreshController.endRefreshing();
-                  if (request.isForMainFrame == true) {
-                    debugPrint("CRITICAL WEB ERROR: ${error.description}");
+                  final desc = error.description.toLowerCase();
+                  final isCancelled = desc.contains('cancel') ||
+                                      desc.contains('interrupted') ||
+                                      error.type == WebResourceErrorType.CANCELLED;
+                  if (request.isForMainFrame == true && !isCancelled) {
+                    debugPrint("CRITICAL WEB ERROR: ${error.description} (type: ${error.type})");
                     if (mounted) {
+                      final isOfflineError = error.type == WebResourceErrorType.HOST_LOOKUP ||
+                                             error.type == WebResourceErrorType.CANNOT_CONNECT_TO_HOST ||
+                                             error.type == WebResourceErrorType.NOT_CONNECTED_TO_INTERNET ||
+                                             desc.contains('offline') ||
+                                             desc.contains('not connected') ||
+                                             desc.contains('internet');
                       setState(() {
                         _isFirstLoad = false;
                         _isReloading = false;
-                        _hasTimeoutError = true;
+                        if (isOfflineError) {
+                          _hasInternet = false;
+                        } else {
+                          _hasTimeoutError = true;
+                        }
                       });
                     }
                   }
@@ -854,15 +850,25 @@ class _WebViewScreenState extends State<WebViewScreen> {
                             width: double.infinity,
                             height: 50,
                             child: ElevatedButton.icon(
-                              onPressed: _triggerNativeLogout,
+                              onPressed: () {
+                                if (!_hasInternet) {
+                                  setState(() {
+                                    _hasInternet = true;
+                                    _isFirstLoad = true;
+                                  });
+                                  _reloadPage();
+                                } else {
+                                  _triggerNativeLogout();
+                                }
+                              },
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: const Color(0xFF0075FF),
                                 foregroundColor: Colors.white,
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                                 elevation: 0,
                               ),
-                              icon: const Icon(Icons.login_rounded, size: 22),
-                              label: const Text('Yeniden Giriş Yap', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                              icon: Icon(!_hasInternet ? Icons.refresh_rounded : Icons.login_rounded, size: 22),
+                              label: Text(!_hasInternet ? 'Tekrar Deneyin' : 'Yeniden Giriş Yap', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                             ),
                           ),
                         ],
