@@ -62,9 +62,16 @@
 	<key>UISupportedInterfaceOrientations~ipad</key>
 	<array>
 		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
 		<string>UIInterfaceOrientationPortrait</string>
 		<string>UIInterfaceOrientationPortraitUpsideDown</string>
 	</array>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>İndirilen dosya ve görsellerin cihazınıza kaydedilmesi için izin gereklidir.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Dosyaların galerinize ve cihazınıza kaydedilmesi için izin gereklidir.</string>
 </dict>
 </plist>

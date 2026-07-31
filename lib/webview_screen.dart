@@ -7,11 +7,14 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:collection';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 // Projenizdeki mevcut servisler
 import 'services/deep_link_service.dart';
 import 'services/auth_service.dart';
 import 'screens/login_screen.dart';
+import 'screens/company_selection_screen.dart';
+import 'widgets/login_info_bottom_sheet.dart';
 
 class WebViewScreen extends StatefulWidget {
   final DeepLinkService deepLinkService;
@@ -34,9 +37,169 @@ class _WebViewScreenState extends State<WebViewScreen> {
   bool _showSessionExpiredModal = false;
   bool _isReauthenticatingFromModal = false;
   bool _isMobileAuthNavigating = false;
+  bool _isShowingCompanySelectionSheet = false;
+  bool _isShowingLoginInfoSheet = false;
   
   Timer? _loadingTimeoutTimer;
   DateTime? currentBackPressTime;
+
+  Future<void> _openLoginInfoBottomSheet(List<Map<String, String>> logs) async {
+    if (_isShowingLoginInfoSheet || !mounted) return;
+    _isShowingLoginInfoSheet = true;
+
+    try {
+      await showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (context) => LoginInfoBottomSheet(loginLogs: logs),
+      );
+    } catch (e) {
+      debugPrint("Login info bottom sheet error: $e");
+    } finally {
+      _isShowingLoginInfoSheet = false;
+      await _cleanUpWebModals();
+    }
+  }
+
+  Future<void> _cleanUpWebModals() async {
+    if (_webViewController == null) return;
+    try {
+      await _webViewController!.evaluateJavascript(source: """
+        (function() {
+          document.querySelectorAll('dxbl-modal-root, .dxbl-modal-root, .company-tree, .company-tree-scroll, dxbl-modal-backdrop, .dxbl-modal-backdrop, .dxbl-popup-backdrop, .modal-backdrop, .dxbl-popup-portal').forEach(function(el) {
+            el.setAttribute('data-native-handled', 'true');
+            try {
+              el.style.setProperty('display', 'none', 'important');
+              el.style.setProperty('visibility', 'hidden', 'important');
+              el.style.setProperty('opacity', '0', 'important');
+              el.style.setProperty('pointer-events', 'none', 'important');
+            } catch(_) {}
+          });
+
+          if (document.body) {
+            document.body.classList.remove('dxbl-modal-open', 'modal-open', 'dxbl-popup-open', 'dxbl-overflow-hidden');
+            document.body.style.removeProperty('pointer-events');
+            document.body.style.removeProperty('overflow');
+            document.body.style.removeProperty('touch-action');
+          }
+          if (document.documentElement) {
+            document.documentElement.classList.remove('dxbl-modal-open', 'modal-open', 'dxbl-popup-open', 'dxbl-overflow-hidden');
+            document.documentElement.style.removeProperty('pointer-events');
+            document.documentElement.style.removeProperty('overflow');
+            document.documentElement.style.removeProperty('touch-action');
+          }
+
+          try {
+            var closeBtn = document.querySelector('button[aria-label="Close"], .dxbl-popup-header-button, [data-dismiss="modal"]');
+            if (closeBtn) {
+              closeBtn.click();
+            }
+          } catch(_) {}
+        })();
+      """);
+    } catch (_) {}
+  }
+
+  Future<void> _openCompanySelectionBottomSheet() async {
+    if (_isShowingCompanySelectionSheet || !mounted) return;
+    _isShowingCompanySelectionSheet = true;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(
+        child: CircularProgressIndicator(color: Color(0xFF0075FF)),
+      ),
+    );
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final String email = prefs.getString('saved_email') ?? '';
+      final String password = prefs.getString('saved_password') ?? '';
+      final bool rememberMe = prefs.getBool('remember_me') ?? true;
+
+      if (email.isEmpty || password.isEmpty) {
+        if (mounted) Navigator.of(context, rootNavigator: true).pop();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Oturum bilgisi bulunamadı, lütfen tekrar giriş yapınız.',
+                style: TextStyle(fontFamily: 'Nunito Sans', fontWeight: FontWeight.w600),
+              ),
+              backgroundColor: Colors.orangeAccent,
+            ),
+          );
+        }
+        return;
+      }
+
+      final companies = await AuthService().loginAPI(email, password, rememberMe: rememberMe);
+
+      if (mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+
+      if (companies != null && companies.isNotEmpty && mounted) {
+        final String? redirectUrl = await showModalBottomSheet<String>(
+          context: context,
+          isScrollControlled: true,
+          backgroundColor: Colors.transparent,
+          builder: (context) => CompanySelectionScreen(
+            deepLinkService: widget.deepLinkService,
+            companies: companies,
+            email: email,
+            password: password,
+            isBottomSheet: true,
+          ),
+        );
+
+        if (redirectUrl != null && redirectUrl.isNotEmpty && mounted) {
+          final fullUrl = redirectUrl.startsWith('http')
+              ? redirectUrl
+              : 'https://bymcloud.app$redirectUrl';
+
+          await AuthService().syncCookiesToWebView("https://bymcloud.app/");
+          if (_webViewController != null) {
+            try {
+              await _webViewController!.loadUrl(
+                urlRequest: URLRequest(
+                  url: WebUri(fullUrl),
+                  headers: {
+                    if (AuthService().sessionCookie != null && AuthService().sessionCookie!.isNotEmpty)
+                      'Cookie': AuthService().sessionCookie!,
+                  },
+                ),
+              );
+            } catch (_) {}
+          }
+        } else if (mounted) {
+          await _cleanUpWebModals();
+        }
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text(
+              'Şirket listesi alınamadı.',
+              style: TextStyle(fontFamily: 'Nunito Sans', fontWeight: FontWeight.w600),
+            ),
+            backgroundColor: Colors.redAccent.shade700,
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint("Company selection sheet load error: $e");
+      if (mounted) {
+        try {
+          Navigator.of(context, rootNavigator: true).pop();
+        } catch (_) {}
+      }
+    } finally {
+      _isShowingCompanySelectionSheet = false;
+      await _cleanUpWebModals();
+    }
+  }
   
   late final StreamSubscription<List<ConnectivityResult>> _connectivitySubscription;
   late final StreamSubscription<Uri> _deepLinkSubscription;
@@ -305,6 +468,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
                 ),
                 initialSettings: InAppWebViewSettings(
                   useShouldOverrideUrlLoading: true,
+                  useOnDownloadStart: true,
                   mediaPlaybackRequiresUserGesture: false,
                   allowsInlineMediaPlayback: true,
                   javaScriptEnabled: true,
@@ -319,6 +483,47 @@ class _WebViewScreenState extends State<WebViewScreen> {
                   javaScriptCanOpenWindowsAutomatically: true,
                   supportMultipleWindows: false,
                 ),
+                onDownloadStartRequest: (controller, downloadStartRequest) async {
+                  debugPrint("File Download Requested: ${downloadStartRequest.url}");
+                  final messenger = ScaffoldMessenger.of(context);
+                  try {
+                    final Uri downloadUri = Uri.parse(downloadStartRequest.url.toString());
+                    final filename = downloadStartRequest.suggestedFilename ?? 'Dosya';
+
+                    if (await canLaunchUrl(downloadUri)) {
+                      await launchUrl(
+                        downloadUri,
+                        mode: LaunchMode.externalApplication,
+                      );
+                      if (mounted) {
+                        messenger.showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              'İndirme başlatıldı: $filename',
+                              style: const TextStyle(fontFamily: 'Nunito Sans', fontWeight: FontWeight.w600),
+                            ),
+                            backgroundColor: const Color(0xFF0075FF),
+                            duration: const Duration(seconds: 3),
+                          ),
+                        );
+                      }
+                    } else {
+                      if (mounted) {
+                        messenger.showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              'Dosya indirme başlatılamadı: $filename',
+                              style: const TextStyle(fontFamily: 'Nunito Sans', fontWeight: FontWeight.w600),
+                            ),
+                            backgroundColor: Colors.redAccent.shade700,
+                          ),
+                        );
+                      }
+                    }
+                  } catch (e) {
+                    debugPrint("File Download Error: $e");
+                  }
+                },
                 initialUserScripts: UnmodifiableListView([
                   UserScript(
                     source: """
@@ -358,6 +563,199 @@ class _WebViewScreenState extends State<WebViewScreen> {
                             }
                           }
                         }, true);
+                      }
+
+                      if (!window._companySelectionListenerAdded) {
+                        window._companySelectionListenerAdded = true;
+                        var _lastCompanyModalTrigger = 0;
+                        
+                        if (!document.getElementById('_nativeCompanyStyle')) {
+                          var styleNode = document.createElement('style');
+                          styleNode.id = '_nativeCompanyStyle';
+                          styleNode.innerHTML = 'dxbl-modal-root[data-native-handled="true"], .dxbl-modal-root[data-native-handled="true"], .company-tree[data-native-handled="true"], .company-tree-scroll[data-native-handled="true"] { display: none !important; visibility: hidden !important; opacity: 0 !important; pointer-events: none !important; position: absolute !important; top: -9999px !important; }';
+                          (document.head || document.documentElement).appendChild(styleNode);
+                        }
+
+                        document.addEventListener('click', function(e) {
+                          var target = e.target ? e.target.closest('button, a, div, span, li') : null;
+                          if (target) {
+                            var text = (target.innerText || target.textContent || '').trim().toLowerCase();
+                            var className = (target.className || '').toString().toLowerCase();
+                            
+                            var isFirmaButton = text.indexOf('firma değiştir') !== -1 || 
+                                                text.indexOf('firma degistir') !== -1 || 
+                                                text.indexOf('şirket değiştir') !== -1 || 
+                                                text.indexOf('sirket degistir') !== -1 ||
+                                                text.indexOf('firma seç') !== -1 ||
+                                                text.indexOf('firma sec') !== -1 ||
+                                                (className.indexOf('user-popup-item') !== -1 && (text.indexOf('firma') !== -1 || text.indexOf('değiştir') !== -1 || text.indexOf('degistir') !== -1));
+                                                
+                            if (isFirmaButton) {
+                              var now = Date.now();
+                              if (now - _lastCompanyModalTrigger > 2000) {
+                                _lastCompanyModalTrigger = now;
+                                setTimeout(function() {
+                                  document.querySelectorAll('dxbl-modal-root, .dxbl-modal-root, .company-tree, .company-tree-scroll').forEach(function(m) {
+                                    m.setAttribute('data-native-handled', 'true');
+                                  });
+                                }, 80);
+
+                                if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+                                  window.flutter_inappwebview.callHandler('onCompanySelectionRequested');
+                                }
+                              }
+                            }
+                          }
+                        }, true);
+
+                        function checkCompanyModalCard() {
+                          var modals = document.querySelectorAll('dxbl-modal-root, .dxbl-modal-root, .company-tree, .company-tree-scroll');
+                          for (var i = 0; i < modals.length; i++) {
+                            var modal = modals[i];
+                            if (modal.getAttribute('data-native-handled') === 'true') {
+                              continue;
+                            }
+
+                            var text = (modal.innerText || modal.textContent || '');
+                            var isCompanyModal = modal.classList.contains('company-tree') || 
+                                                 modal.classList.contains('company-tree-scroll') || 
+                                                 text.indexOf('Seçim Yapınız') !== -1 || 
+                                                 text.indexOf('Secim Yapiniz') !== -1;
+
+                            if (isCompanyModal) {
+                              modal.setAttribute('data-native-handled', 'true');
+                              var rootModal = modal.closest('dxbl-modal-root, .dxbl-modal-root');
+                              if (rootModal) {
+                                rootModal.setAttribute('data-native-handled', 'true');
+                              }
+
+                              var now = Date.now();
+                              if (now - _lastCompanyModalTrigger > 2000) {
+                                _lastCompanyModalTrigger = now;
+                                if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+                                  window.flutter_inappwebview.callHandler('onCompanySelectionRequested');
+                                }
+                              }
+                            }
+                          }
+                        }
+
+                        var companyObserver = new MutationObserver(checkCompanyModalCard);
+                        companyObserver.observe(document.body || document.documentElement, { childList: true, subtree: true });
+                        checkCompanyModalCard();
+                      }
+
+                      if (!window._loginInfoListenerAdded) {
+                        window._loginInfoListenerAdded = true;
+                        var _lastLoginInfoTrigger = 0;
+
+                        function tryExtractAndOpenLoginInfo() {
+                          var attempts = 0;
+                          var maxAttempts = 15;
+                          
+                          var interval = setInterval(function() {
+                            attempts++;
+                            var modals = document.querySelectorAll('dxbl-modal-root, .dxbl-modal-root, dxbl-modal-dialog, .dxbl-popup');
+                            var found = false;
+                            
+                            for (var i = 0; i < modals.length; i++) {
+                              var m = modals[i];
+                              var mText = (m.innerText || m.textContent || '');
+                              
+                              var isLoginModal = mText.indexOf('Bilgisayar Adı') !== -1 || 
+                                                 mText.indexOf('Bilgisayar Adi') !== -1 ||
+                                                 mText.indexOf('IP') !== -1 ||
+                                                 mText.indexOf('Tarih') !== -1 ||
+                                                 m.querySelector('.dxbl-grid') !== null ||
+                                                 m.querySelector('table') !== null;
+                                                 
+                              if (isLoginModal) {
+                                var logs = [];
+                                var rows = m.querySelectorAll('tbody tr');
+                                for (var r = 0; r < rows.length; r++) {
+                                  var cells = rows[r].querySelectorAll('td[role="gridcell"], td');
+                                  if (cells.length >= 3) {
+                                    var dateVal = (cells[0].innerText || cells[0].textContent || '').trim();
+                                    var ipVal = (cells[1].innerText || cells[1].textContent || '').trim();
+                                    var devVal = (cells[2].innerText || cells[2].textContent || '').trim();
+                                    if (dateVal || ipVal || devVal) {
+                                      logs.push({ date: dateVal, ip: ipVal, device: devVal });
+                                    }
+                                  }
+                                }
+                                
+                                if (logs.length > 0 || attempts >= maxAttempts) {
+                                  found = true;
+                                  clearInterval(interval);
+                                  
+                                  var rootM = m.closest('dxbl-modal-root, .dxbl-modal-root') || m;
+                                  rootM.setAttribute('data-native-handled', 'true');
+                                  
+                                  if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+                                    window.flutter_inappwebview.callHandler('onLoginInfoRequested', logs);
+                                  }
+                                  break;
+                                }
+                              }
+                            }
+                            
+                            if (!found && attempts >= maxAttempts) {
+                              clearInterval(interval);
+                              if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+                                window.flutter_inappwebview.callHandler('onLoginInfoRequested', []);
+                              }
+                            }
+                          }, 100);
+                        }
+
+                        document.addEventListener('click', function(e) {
+                          var target = e.target ? e.target.closest('button, a, div, span, li') : null;
+                          if (target) {
+                            var text = (target.innerText || target.textContent || '').trim().toLowerCase();
+                            var className = (target.className || '').toString().toLowerCase();
+                            
+                            var isLoginInfoBtn = text.indexOf('giriş bilgisi') !== -1 || 
+                                                 text.indexOf('giris bilgisi') !== -1 || 
+                                                 text.indexOf('giriş bilgiler') !== -1 || 
+                                                 text.indexOf('giris bilgiler') !== -1 ||
+                                                 (className.indexOf('user-popup-item') !== -1 && (text.indexOf('giriş') !== -1 || text.indexOf('giris') !== -1));
+                                                 
+                            if (isLoginInfoBtn) {
+                              var now = Date.now();
+                              if (now - _lastLoginInfoTrigger > 1500) {
+                                _lastLoginInfoTrigger = now;
+                                tryExtractAndOpenLoginInfo();
+                              }
+                            }
+                          }
+                        }, true);
+
+                        function checkLoginInfoModalCard() {
+                          var modals = document.querySelectorAll('dxbl-modal-root, .dxbl-modal-root');
+                          for (var i = 0; i < modals.length; i++) {
+                            var modal = modals[i];
+                            if (modal.getAttribute('data-native-handled') === 'true') {
+                              continue;
+                            }
+
+                            var text = (modal.innerText || modal.textContent || '');
+                            var isLoginInfoModal = text.indexOf('Bilgisayar Adı') !== -1 || 
+                                                   text.indexOf('Bilgisayar Adi') !== -1 ||
+                                                   (text.indexOf('Tarih') !== -1 && text.indexOf('IP') !== -1);
+
+                            if (isLoginInfoModal) {
+                              var now = Date.now();
+                              if (now - _lastLoginInfoTrigger > 1500) {
+                                _lastLoginInfoTrigger = now;
+                                tryExtractAndOpenLoginInfo();
+                              }
+                            }
+                          }
+                        }
+
+                        var loginInfoObserver = new MutationObserver(checkLoginInfoModalCard);
+                        loginInfoObserver.observe(document.body || document.documentElement, { childList: true, subtree: true });
+                        checkLoginInfoModalCard();
                       }
                     """,
                     injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
@@ -410,6 +808,33 @@ class _WebViewScreenState extends State<WebViewScreen> {
                           setState(() {
                             _showSessionExpiredModal = true;
                           });
+                        }
+                      },
+                    );
+                    controller.addJavaScriptHandler(
+                      handlerName: 'onCompanySelectionRequested',
+                      callback: (args) {
+                        _openCompanySelectionBottomSheet();
+                      },
+                    );
+                    controller.addJavaScriptHandler(
+                      handlerName: 'onLoginInfoRequested',
+                      callback: (args) {
+                        if (args.isNotEmpty && args[0] is List) {
+                          final List rawList = args[0] as List;
+                          final List<Map<String, String>> logs = rawList.map((item) {
+                            if (item is Map) {
+                              return {
+                                'date': (item['date'] ?? '').toString(),
+                                'ip': (item['ip'] ?? '').toString(),
+                                'device': (item['device'] ?? '').toString(),
+                              };
+                            }
+                            return {'date': '', 'ip': '', 'device': ''};
+                          }).toList();
+                          _openLoginInfoBottomSheet(logs);
+                        } else {
+                          _openLoginInfoBottomSheet([]);
                         }
                       },
                     );
@@ -521,6 +946,207 @@ class _WebViewScreenState extends State<WebViewScreen> {
                             }
                           }
                         }, true);
+                      }
+                    """);
+                  } catch (_) {}
+
+                  try {
+                    await controller.evaluateJavascript(source: """
+                      if (!window._companySelectionListenerAdded) {
+                        window._companySelectionListenerAdded = true;
+                        var _lastCompanyModalTrigger = 0;
+                        
+                        function hideElementSafely(el) {
+                          if (!el) return;
+                          el.setAttribute('data-native-handled', 'true');
+                          try {
+                            el.style.setProperty('display', 'none', 'important');
+                            el.style.setProperty('visibility', 'hidden', 'important');
+                            el.style.setProperty('opacity', '0', 'important');
+                            el.style.setProperty('pointer-events', 'none', 'important');
+                            el.style.setProperty('position', 'absolute', 'important');
+                            el.style.setProperty('top', '-9999px', 'important');
+                          } catch (_) {}
+                        }
+                        
+                        document.addEventListener('click', function(e) {
+                          var target = e.target ? e.target.closest('button, a, div, span, li') : null;
+                          if (target) {
+                            var text = (target.innerText || target.textContent || '').trim().toLowerCase();
+                            var className = (target.className || '').toString().toLowerCase();
+                            
+                            var isFirmaButton = text.indexOf('firma değiştir') !== -1 || 
+                                                text.indexOf('firma degistir') !== -1 || 
+                                                text.indexOf('şirket değiştir') !== -1 || 
+                                                text.indexOf('sirket degistir') !== -1 ||
+                                                text.indexOf('firma seç') !== -1 ||
+                                                text.indexOf('firma sec') !== -1 ||
+                                                (className.indexOf('user-popup-item') !== -1 && (text.indexOf('firma') !== -1 || text.indexOf('değiştir') !== -1 || text.indexOf('degistir') !== -1));
+                                                
+                            if (isFirmaButton) {
+                              var now = Date.now();
+                              if (now - _lastCompanyModalTrigger > 2000) {
+                                _lastCompanyModalTrigger = now;
+                                setTimeout(function() {
+                                  document.querySelectorAll('dxbl-modal-root, .dxbl-modal-root, .company-tree, .company-tree-scroll').forEach(function(m) {
+                                    hideElementSafely(m);
+                                  });
+                                }, 80);
+
+                                if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+                                  window.flutter_inappwebview.callHandler('onCompanySelectionRequested');
+                                }
+                              }
+                            }
+                          }
+                        }, true);
+
+                        function checkCompanyModalCard() {
+                          var modals = document.querySelectorAll('dxbl-modal-root, .dxbl-modal-root, .company-tree, .company-tree-scroll');
+                          for (var i = 0; i < modals.length; i++) {
+                            var modal = modals[i];
+                            if (modal.getAttribute('data-native-handled') === 'true') {
+                              continue;
+                            }
+
+                            var text = (modal.innerText || modal.textContent || '');
+                            var isCompanyModal = modal.classList.contains('company-tree') || 
+                                                 modal.classList.contains('company-tree-scroll') || 
+                                                 text.indexOf('Seçim Yapınız') !== -1 || 
+                                                 text.indexOf('Secim Yapiniz') !== -1;
+
+                            if (isCompanyModal) {
+                              var rootModal = modal.closest('dxbl-modal-root, .dxbl-modal-root') || modal;
+                              hideElementSafely(modal);
+                              hideElementSafely(rootModal);
+
+                              var now = Date.now();
+                              if (now - _lastCompanyModalTrigger > 2000) {
+                                _lastCompanyModalTrigger = now;
+                                if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+                                  window.flutter_inappwebview.callHandler('onCompanySelectionRequested');
+                                }
+                              }
+                            }
+                          }
+                        }
+
+                        var companyObserver = new MutationObserver(checkCompanyModalCard);
+                        companyObserver.observe(document.body || document.documentElement, { childList: true, subtree: true });
+                        checkCompanyModalCard();
+                      }
+
+                      if (!window._loginInfoListenerAdded) {
+                        window._loginInfoListenerAdded = true;
+                        var _lastLoginInfoTrigger = 0;
+
+                        function tryExtractAndOpenLoginInfo() {
+                          var attempts = 0;
+                          var maxAttempts = 15;
+                          
+                          var interval = setInterval(function() {
+                            attempts++;
+                            var modals = document.querySelectorAll('dxbl-modal-root, .dxbl-modal-root, dxbl-modal-dialog, .dxbl-popup');
+                            var found = false;
+                            
+                            for (var i = 0; i < modals.length; i++) {
+                              var m = modals[i];
+                              var mText = (m.innerText || m.textContent || '');
+                              
+                              var isLoginModal = mText.indexOf('Bilgisayar Adı') !== -1 || 
+                                                 mText.indexOf('Bilgisayar Adi') !== -1 ||
+                                                 mText.indexOf('IP') !== -1 ||
+                                                 mText.indexOf('Tarih') !== -1 ||
+                                                 m.querySelector('.dxbl-grid') !== null ||
+                                                 m.querySelector('table') !== null;
+                                                 
+                              if (isLoginModal) {
+                                var logs = [];
+                                var rows = m.querySelectorAll('tbody tr');
+                                for (var r = 0; r < rows.length; r++) {
+                                  var cells = rows[r].querySelectorAll('td[role="gridcell"], td');
+                                  if (cells.length >= 3) {
+                                    var dateVal = (cells[0].innerText || cells[0].textContent || '').trim();
+                                    var ipVal = (cells[1].innerText || cells[1].textContent || '').trim();
+                                    var devVal = (cells[2].innerText || cells[2].textContent || '').trim();
+                                    if (dateVal || ipVal || devVal) {
+                                      logs.push({ date: dateVal, ip: ipVal, device: devVal });
+                                    }
+                                  }
+                                }
+                                
+                                if (logs.length > 0 || attempts >= maxAttempts) {
+                                  found = true;
+                                  clearInterval(interval);
+                                  
+                                  var rootM = m.closest('dxbl-modal-root, .dxbl-modal-root') || m;
+                                  rootM.setAttribute('data-native-handled', 'true');
+                                  
+                                  if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+                                    window.flutter_inappwebview.callHandler('onLoginInfoRequested', logs);
+                                  }
+                                  break;
+                                }
+                              }
+                            }
+                            
+                            if (!found && attempts >= maxAttempts) {
+                              clearInterval(interval);
+                              if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+                                window.flutter_inappwebview.callHandler('onLoginInfoRequested', []);
+                              }
+                            }
+                          }, 100);
+                        }
+
+                        document.addEventListener('click', function(e) {
+                          var target = e.target ? e.target.closest('button, a, div, span, li') : null;
+                          if (target) {
+                            var text = (target.innerText || target.textContent || '').trim().toLowerCase();
+                            var className = (target.className || '').toString().toLowerCase();
+                            
+                            var isLoginInfoBtn = text.indexOf('giriş bilgisi') !== -1 || 
+                                                 text.indexOf('giris bilgisi') !== -1 || 
+                                                 text.indexOf('giriş bilgiler') !== -1 || 
+                                                 text.indexOf('giris bilgiler') !== -1 ||
+                                                 (className.indexOf('user-popup-item') !== -1 && (text.indexOf('giriş') !== -1 || text.indexOf('giris') !== -1));
+                                                 
+                            if (isLoginInfoBtn) {
+                              var now = Date.now();
+                              if (now - _lastLoginInfoTrigger > 1500) {
+                                _lastLoginInfoTrigger = now;
+                                tryExtractAndOpenLoginInfo();
+                              }
+                            }
+                          }
+                        }, true);
+
+                        function checkLoginInfoModalCard() {
+                          var modals = document.querySelectorAll('dxbl-modal-root, .dxbl-modal-root');
+                          for (var i = 0; i < modals.length; i++) {
+                            var modal = modals[i];
+                            if (modal.getAttribute('data-native-handled') === 'true') {
+                              continue;
+                            }
+
+                            var text = (modal.innerText || modal.textContent || '');
+                            var isLoginInfoModal = text.indexOf('Bilgisayar Adı') !== -1 || 
+                                                   text.indexOf('Bilgisayar Adi') !== -1 ||
+                                                   (text.indexOf('Tarih') !== -1 && text.indexOf('IP') !== -1);
+
+                            if (isLoginInfoModal) {
+                              var now = Date.now();
+                              if (now - _lastLoginInfoTrigger > 1500) {
+                                _lastLoginInfoTrigger = now;
+                                tryExtractAndOpenLoginInfo();
+                              }
+                            }
+                          }
+                        }
+
+                        var loginInfoObserver = new MutationObserver(checkLoginInfoModalCard);
+                        loginInfoObserver.observe(document.body || document.documentElement, { childList: true, subtree: true });
+                        checkLoginInfoModalCard();
                       }
                     """);
                   } catch (_) {}

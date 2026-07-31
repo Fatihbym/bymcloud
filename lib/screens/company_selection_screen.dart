@@ -12,6 +12,7 @@ class CompanySelectionScreen extends StatefulWidget {
   final List<dynamic> companies;
   final String email;
   final String password;
+  final bool isBottomSheet;
 
   const CompanySelectionScreen({
     super.key,
@@ -19,6 +20,7 @@ class CompanySelectionScreen extends StatefulWidget {
     required this.companies,
     required this.email,
     required this.password,
+    this.isBottomSheet = false,
   });
 
   @override
@@ -34,6 +36,9 @@ class _CompanySelectionScreenState extends State<CompanySelectionScreen>
   String _searchQuery = '';
   Timer? _searchDebounce;
 
+  int? _savedDbId;
+  int? _savedFirmId;
+
   List<Map<String, dynamic>> _filteredCompanies = [];
 
   late AnimationController _shimmerController;
@@ -42,7 +47,8 @@ class _CompanySelectionScreenState extends State<CompanySelectionScreen>
   @override
   void initState() {
     super.initState();
-    _filteredCompanies = widget.companies.cast<Map<String, dynamic>>();
+    _filteredCompanies = List<Map<String, dynamic>>.from(widget.companies);
+    _loadSavedPreferences();
 
     _shimmerController = AnimationController(
       vsync: this,
@@ -60,6 +66,39 @@ class _CompanySelectionScreenState extends State<CompanySelectionScreen>
     _searchController.dispose();
     _shimmerController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadSavedPreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() {
+        _savedDbId = prefs.getInt('saved_dbid');
+        _savedFirmId = prefs.getInt('saved_firmaid');
+
+        if (_savedDbId != null) {
+          _sortCompanies(_filteredCompanies);
+          // Find the saved db and load its firms automatically
+          try {
+            final savedDb = _filteredCompanies.firstWhere((db) => db['a_id'] == _savedDbId);
+            if (!_fetchedFirms.containsKey(_savedDbId) && _loadingFirms[_savedDbId] != true) {
+              _loadFirmsForDb(savedDb);
+            }
+          } catch (e) {
+            // Ignore if not found
+          }
+        }
+      });
+    }
+  }
+
+  void _sortCompanies(List<Map<String, dynamic>> list) {
+    if (_savedDbId != null) {
+      list.sort((a, b) {
+        if (a['a_id'] == _savedDbId) return -1;
+        if (b['a_id'] == _savedDbId) return 1;
+        return 0;
+      });
+    }
   }
 
   void _goToLogin() {
@@ -134,14 +173,18 @@ class _CompanySelectionScreenState extends State<CompanySelectionScreen>
             ? redirectUrl
             : 'https://bymcloud.app$redirectUrl';
 
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(
-            builder: (context) => WebViewScreen(
-              deepLinkService: widget.deepLinkService,
-              initialUrl: fullUrl,
+        if (widget.isBottomSheet) {
+          Navigator.of(context).pop(fullUrl);
+        } else {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (context) => WebViewScreen(
+                deepLinkService: widget.deepLinkService,
+                initialUrl: fullUrl,
+              ),
             ),
-          ),
-        );
+          );
+        }
       }
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -173,7 +216,8 @@ class _CompanySelectionScreenState extends State<CompanySelectionScreen>
     setState(() {
       _searchQuery = cleanQuery;
       if (cleanQuery.isEmpty) {
-        _filteredCompanies = widget.companies.cast<Map<String, dynamic>>();
+        _filteredCompanies = List<Map<String, dynamic>>.from(widget.companies);
+        _sortCompanies(_filteredCompanies);
       } else {
         final List<Map<String, dynamic>> results = [];
         for (var company in widget.companies) {
@@ -205,6 +249,7 @@ class _CompanySelectionScreenState extends State<CompanySelectionScreen>
             }
           }
         }
+        _sortCompanies(results);
         _filteredCompanies = results;
       }
     });
@@ -264,31 +309,10 @@ class _CompanySelectionScreenState extends State<CompanySelectionScreen>
   Widget build(BuildContext context) {
     final isSearching = _searchQuery.isNotEmpty;
 
-    return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        surfaceTintColor: Colors.transparent,
-        elevation: 0.5,
-        centerTitle: true,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Color(0xFF0F172A), size: 20),
-          onPressed: _goToLogin,
-        ),
-        title: Text(
-          LocalizationService().translate('select_company'),
-          style: const TextStyle(
-            color: Color(0xFF0F172A),
-            fontWeight: FontWeight.bold,
-            fontFamily: 'Nunito Sans',
-            fontSize: 18,
-          ),
-        ),
-      ),
-      body: Stack(
-        children: [
-          Column(
-            children: [
+    final bodyWidget = Stack(
+      children: [
+        Column(
+          children: [
               // Gelismis Arama Paneli (Enhanced Search Box)
               Container(
                 color: Colors.white,
@@ -412,11 +436,12 @@ class _CompanySelectionScreenState extends State<CompanySelectionScreen>
                                   : (_fetchedFirms[dbid] ?? []));
 
                           final isFetching = _loadingFirms[dbid] == true;
+                          final isLastSelectedCompany = (dbid == _savedDbId);
 
                           return Container(
                             margin: const EdgeInsets.only(bottom: 14),
                             decoration: BoxDecoration(
-                              color: Colors.white,
+                              color: isLastSelectedCompany ? const Color(0xFFFEF9C3).withValues(alpha: 0.3) : Colors.white,
                               borderRadius: BorderRadius.circular(16),
                               boxShadow: [
                                 BoxShadow(
@@ -431,8 +456,8 @@ class _CompanySelectionScreenState extends State<CompanySelectionScreen>
                               color: Colors.transparent,
                               borderRadius: BorderRadius.circular(16),
                               child: ExpansionTile(
-                                key: ValueKey('db_${dbid}_$isSearching'),
-                                initiallyExpanded: isSearching,
+                                key: ValueKey('db_${dbid}_${isSearching}_$isLastSelectedCompany'),
+                                initiallyExpanded: isSearching || isLastSelectedCompany,
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                                 collapsedShape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                                 onExpansionChanged: (expanded) {
@@ -504,11 +529,12 @@ class _CompanySelectionScreenState extends State<CompanySelectionScreen>
                                     ...firms.map((firm) {
                                       final String firmName = firm['a_adi'] ?? 'İsimsiz Firma';
                                       final int firmaid = firm['a_id'] ?? 1;
+                                      final bool isLastSelectedFirm = (dbid == _savedDbId && firmaid == _savedFirmId);
 
                                       return Padding(
                                         padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
                                         child: Material(
-                                          color: const Color(0xFFF8FAFC),
+                                          color: isLastSelectedFirm ? const Color(0xFFFEF9C3) : const Color(0xFFF8FAFC),
                                           borderRadius: BorderRadius.circular(12),
                                           child: InkWell(
                                             borderRadius: BorderRadius.circular(12),
@@ -565,7 +591,82 @@ class _CompanySelectionScreenState extends State<CompanySelectionScreen>
               ),
             ),
         ],
+      );
+
+    if (widget.isBottomSheet) {
+      return Container(
+        height: MediaQuery.of(context).size.height * 0.85,
+        decoration: const BoxDecoration(
+          color: Color(0xFFF8FAFC),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Scaffold(
+          backgroundColor: Colors.transparent,
+          body: Column(
+            children: [
+              Center(
+                child: Container(
+                  margin: const EdgeInsets.only(top: 10, bottom: 4),
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFCBD5E1),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 6.0),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      LocalizationService().translate('select_company'),
+                      style: const TextStyle(
+                        color: Color(0xFF0F172A),
+                        fontWeight: FontWeight.bold,
+                        fontFamily: 'Nunito Sans',
+                        fontSize: 18,
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close_rounded, color: Color(0xFF64748B), size: 24),
+                      onPressed: () => Navigator.of(context).pop(),
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(height: 1, color: Color(0xFFE2E8F0)),
+              Expanded(child: bodyWidget),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Scaffold(
+      backgroundColor: const Color(0xFFF8FAFC),
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0.5,
+        centerTitle: true,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Color(0xFF0F172A), size: 20),
+          onPressed: _goToLogin,
+        ),
+        title: Text(
+          LocalizationService().translate('select_company'),
+          style: const TextStyle(
+            color: Color(0xFF0F172A),
+            fontWeight: FontWeight.bold,
+            fontFamily: 'Nunito Sans',
+            fontSize: 18,
+          ),
+        ),
       ),
+      body: bodyWidget,
     );
   }
 }
