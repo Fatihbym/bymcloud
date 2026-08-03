@@ -15,6 +15,8 @@ import 'services/auth_service.dart';
 import 'screens/login_screen.dart';
 import 'screens/company_selection_screen.dart';
 import 'widgets/login_info_bottom_sheet.dart';
+import 'widgets/theme_selection_bottom_sheet.dart';
+import 'widgets/menu_view_selection_bottom_sheet.dart';
 
 class WebViewScreen extends StatefulWidget {
   final DeepLinkService deepLinkService;
@@ -39,9 +41,144 @@ class _WebViewScreenState extends State<WebViewScreen> {
   bool _isMobileAuthNavigating = false;
   bool _isShowingCompanySelectionSheet = false;
   bool _isShowingLoginInfoSheet = false;
+  bool _isShowingThemeSheet = false;
+  bool _isShowingMenuViewSheet = false;
   
   Timer? _loadingTimeoutTimer;
   DateTime? currentBackPressTime;
+
+  Future<void> _openMenuViewSelectionBottomSheet() async {
+    if (_isShowingMenuViewSheet || !mounted) return;
+    _isShowingMenuViewSheet = true;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final String currentViewMode = prefs.getString('saved_menu_view_mode') ?? 'authorized';
+      if (!mounted) return;
+
+      final String? selectedMode = await showModalBottomSheet<String>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (context) => MenuViewSelectionBottomSheet(
+          currentViewMode: currentViewMode,
+        ),
+      );
+
+      if (selectedMode != null && mounted) {
+        await prefs.setString('saved_menu_view_mode', selectedMode);
+        await _applyMenuViewToWebView(selectedMode);
+      }
+    } catch (e) {
+      debugPrint("Menu view selection sheet error: $e");
+    } finally {
+      _isShowingMenuViewSheet = false;
+      await _cleanUpWebModals();
+    }
+  }
+
+  Future<void> _applyMenuViewToWebView([String? viewMode]) async {
+    if (_webViewController == null) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final selectedMode = viewMode ?? prefs.getString('saved_menu_view_mode') ?? 'authorized';
+
+      await _webViewController!.evaluateJavascript(source: """
+        (function() {
+          try {
+            var targetKeyword = '';
+            if ('$selectedMode' === 'authorized') targetKeyword = 'yetkili';
+            else if ('$selectedMode' === 'package') targetKeyword = 'paket';
+            else if ('$selectedMode' === 'all') targetKeyword = 'tüm modüller';
+
+            if (!targetKeyword) return;
+
+            var menuItems = document.querySelectorAll('.sub-menu *, dxbl-popup *, .user-popup-wrapper *, .user-popup-item *');
+            for (var i = 0; i < menuItems.length; i++) {
+              var t = (menuItems[i].innerText || menuItems[i].textContent || '').trim().toLowerCase();
+              if (t.indexOf(targetKeyword) !== -1) {
+                menuItems[i].click();
+                break;
+              }
+            }
+          } catch(e) {}
+        })();
+      """);
+    } catch (e) {
+      debugPrint("Apply menu view error: $e");
+    }
+  }
+
+  Future<void> _openThemeSelectionBottomSheet() async {
+    if (_isShowingThemeSheet || !mounted) return;
+    _isShowingThemeSheet = true;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final String currentTheme = prefs.getString('saved_theme_mode') ?? 'system';
+      if (!mounted) return;
+
+      final String? selectedTheme = await showModalBottomSheet<String>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (context) => ThemeSelectionBottomSheet(
+          currentTheme: currentTheme,
+        ),
+      );
+
+      if (selectedTheme != null && mounted) {
+        await prefs.setString('saved_theme_mode', selectedTheme);
+        await _applyThemeToWebView(selectedTheme);
+      }
+    } catch (e) {
+      debugPrint("Theme selection sheet error: $e");
+    } finally {
+      _isShowingThemeSheet = false;
+      await _cleanUpWebModals();
+    }
+  }
+
+  Future<void> _applyThemeToWebView([String? themeMode]) async {
+    if (_webViewController == null) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final selectedTheme = themeMode ?? prefs.getString('saved_theme_mode') ?? 'system';
+
+      bool isDark = false;
+      if (selectedTheme == 'dark') {
+        isDark = true;
+      } else if (selectedTheme == 'light') {
+        isDark = false;
+      } else {
+        if (mounted) {
+          isDark = MediaQuery.of(context).platformBrightness == Brightness.dark;
+        } else {
+          isDark = WidgetsBinding.instance.platformDispatcher.platformBrightness == Brightness.dark;
+        }
+      }
+
+      final bsTheme = isDark ? 'dark' : 'light';
+
+      await _webViewController!.evaluateJavascript(source: """
+        (function() {
+          try {
+            document.documentElement.setAttribute('data-bs-theme', '$bsTheme');
+            document.documentElement.setAttribute('data-theme', '$bsTheme');
+            if ($isDark) {
+              document.documentElement.classList.add('dark', 'dark-mode');
+              if (document.body) document.body.classList.add('dark', 'dark-mode');
+            } else {
+              document.documentElement.classList.remove('dark', 'dark-mode');
+              if (document.body) document.body.classList.remove('dark', 'dark-mode');
+            }
+          } catch(e) {}
+        })();
+      """);
+    } catch (e) {
+      debugPrint("Apply theme error: $e");
+    }
+  }
 
   Future<void> _openLoginInfoBottomSheet(List<Map<String, String>> logs) async {
     if (_isShowingLoginInfoSheet || !mounted) return;
@@ -757,6 +894,93 @@ class _WebViewScreenState extends State<WebViewScreen> {
                         loginInfoObserver.observe(document.body || document.documentElement, { childList: true, subtree: true });
                         checkLoginInfoModalCard();
                       }
+
+                      if (!window._themeSelectionListenerAdded) {
+                        window._themeSelectionListenerAdded = true;
+                        var _lastThemeModalTrigger = 0;
+
+                        document.addEventListener('click', function(e) {
+                          var target = e.target ? e.target.closest('button, a, div, span, li, i') : null;
+                          if (target) {
+                            var popupItem = target.closest('.user-popup-item') || target;
+                            var text = (popupItem.innerText || popupItem.textContent || '').trim().toLowerCase();
+                            var className = (popupItem.className || '').toString().toLowerCase();
+                            var hasPalette = popupItem.querySelector ? (popupItem.querySelector('.fa-palette, .fa-paint-brush') !== null) : false;
+                            if (!hasPalette && target.className && target.className.toString().indexOf('fa-palette') !== -1) {
+                              hasPalette = true;
+                            }
+
+                            var isThemeBtn = (text === 'tema') || 
+                                             (text.indexOf('tema') !== -1 && (hasPalette || className.indexOf('user-popup-item') !== -1)) ||
+                                             (hasPalette && (text.indexOf('tema') !== -1 || text.length < 15));
+
+                            if (isThemeBtn) {
+                              var now = Date.now();
+                              if (now - _lastThemeModalTrigger > 1500) {
+                                _lastThemeModalTrigger = now;
+
+                                try {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                } catch(_) {}
+
+                                setTimeout(function() {
+                                  document.querySelectorAll('.user-popup-wrapper .sub-menu, dxbl-modal-root, .dxbl-modal-root').forEach(function(m) {
+                                    m.setAttribute('data-native-handled', 'true');
+                                  });
+                                }, 80);
+
+                                if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+                                  window.flutter_inappwebview.callHandler('onThemeSelectionRequested');
+                                }
+                              }
+                            }
+                          }
+                        }, true);
+                      }
+
+                      if (!window._menuViewSelectionListenerAdded) {
+                        window._menuViewSelectionListenerAdded = true;
+                        var _lastMenuViewModalTrigger = 0;
+
+                        document.addEventListener('click', function(e) {
+                          var target = e.target ? e.target.closest('button, a, div, span, li, i') : null;
+                          if (target) {
+                            var popupItem = target.closest('.user-popup-item') || target;
+                            var text = (popupItem.innerText || popupItem.textContent || '').trim().toLowerCase();
+                            var className = (popupItem.className || '').toString().toLowerCase();
+                            var hasEye = popupItem.querySelector ? (popupItem.querySelector('.fa-eye') !== null) : false;
+                            if (!hasEye && target.className && target.className.toString().indexOf('fa-eye') !== -1) {
+                              hasEye = true;
+                            }
+
+                            var isMenuViewBtn = (text.indexOf('menü görünümü') !== -1 || text.indexOf('menu gorunumu') !== -1) ||
+                                                (hasEye && (text.indexOf('görünüm') !== -1 || text.indexOf('gorunum') !== -1 || text.indexOf('menü') !== -1 || text.indexOf('menu') !== -1));
+
+                            if (isMenuViewBtn) {
+                              var now = Date.now();
+                              if (now - _lastMenuViewModalTrigger > 1500) {
+                                _lastMenuViewModalTrigger = now;
+
+                                try {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                } catch(_) {}
+
+                                setTimeout(function() {
+                                  document.querySelectorAll('.user-popup-wrapper .sub-menu, dxbl-modal-root, .dxbl-modal-root').forEach(function(m) {
+                                    m.setAttribute('data-native-handled', 'true');
+                                  });
+                                }, 80);
+
+                                if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+                                  window.flutter_inappwebview.callHandler('onMenuViewSelectionRequested');
+                                }
+                              }
+                            }
+                          }
+                        }, true);
+                      }
                     """,
                     injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
                   ),
@@ -795,6 +1019,18 @@ class _WebViewScreenState extends State<WebViewScreen> {
                 onWebViewCreated: (controller) {
                   _webViewController = controller;
                   try {
+                    controller.addJavaScriptHandler(
+                      handlerName: 'onMenuViewSelectionRequested',
+                      callback: (args) {
+                        _openMenuViewSelectionBottomSheet();
+                      },
+                    );
+                    controller.addJavaScriptHandler(
+                      handlerName: 'onThemeSelectionRequested',
+                      callback: (args) {
+                        _openThemeSelectionBottomSheet();
+                      },
+                    );
                     controller.addJavaScriptHandler(
                       handlerName: 'onExplicitLogoutClicked',
                       callback: (args) {
@@ -897,6 +1133,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
                 onLoadStop: (controller, url) async {
                   pullToRefreshController.endRefreshing();
                   _cancelLoadingTimeoutTimer();
+                  await _applyThemeToWebView();
 
                   // Sadece web tarafının kendi siyah loader'ını gizler
                   try {
