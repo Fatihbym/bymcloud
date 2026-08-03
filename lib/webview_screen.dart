@@ -50,6 +50,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
   Future<void> _openMenuViewSelectionBottomSheet() async {
     if (_isShowingMenuViewSheet || !mounted) return;
     _isShowingMenuViewSheet = true;
+    await _cleanUpWebModals();
 
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -93,7 +94,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
 
             if (!targetKeyword) return;
 
-            var menuItems = document.querySelectorAll('.sub-menu *, dxbl-popup *, .user-popup-wrapper *, .user-popup-item *');
+            var menuItems = document.querySelectorAll('.user-sub-menu .user-sub-item, .user-sub-item, .sub-menu *, dxbl-popup *, .user-popup-wrapper *, .user-popup-item *');
             for (var i = 0; i < menuItems.length; i++) {
               var t = (menuItems[i].innerText || menuItems[i].textContent || '').trim().toLowerCase();
               if (t.indexOf(targetKeyword) !== -1) {
@@ -112,6 +113,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
   Future<void> _openThemeSelectionBottomSheet() async {
     if (_isShowingThemeSheet || !mounted) return;
     _isShowingThemeSheet = true;
+    await _cleanUpWebModals();
 
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -171,6 +173,22 @@ class _WebViewScreenState extends State<WebViewScreen> {
             } else {
               document.documentElement.classList.remove('dark', 'dark-mode');
               if (document.body) document.body.classList.remove('dark', 'dark-mode');
+            }
+
+            var themeTarget = '';
+            if ('$selectedTheme' === 'light') themeTarget = 'aydınlık';
+            else if ('$selectedTheme' === 'dark') themeTarget = 'koyu';
+            else if ('$selectedTheme' === 'system') themeTarget = 'sistem';
+
+            if (themeTarget) {
+              var subItems = document.querySelectorAll('.user-sub-menu .user-sub-item, .user-sub-item');
+              for (var i = 0; i < subItems.length; i++) {
+                var t = (subItems[i].innerText || subItems[i].textContent || '').trim().toLowerCase();
+                if (t.indexOf(themeTarget) !== -1) {
+                  subItems[i].click();
+                  break;
+                }
+              }
             }
           } catch(e) {}
         })();
@@ -1141,7 +1159,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
                       if (!window._pageLoaderStyleAdded) {
                         window._pageLoaderStyleAdded = true;
                         var style = document.createElement('style');
-                        style.innerHTML = '.app-page-loader { display: none !important; visibility: hidden !important; opacity: 0 !important; pointer-events: none !important; }';
+                        style.innerHTML = '.app-page-loader, .user-sub-menu, .user-sub-menu.open { display: none !important; visibility: hidden !important; opacity: 0 !important; pointer-events: none !important; }';
                         (document.head || document.documentElement).appendChild(style);
                       }
                     """);
