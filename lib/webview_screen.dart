@@ -47,9 +47,49 @@ class _WebViewScreenState extends State<WebViewScreen> {
   bool _isBlazorReconnecting = false;
   bool _showMultipleSessionModal = false;
   bool _isHandlingMultipleSessionAction = false;
+  bool _showForceLogoutModal = false;
+  bool _isHandlingForceLogoutAction = false;
 
   Timer? _loadingTimeoutTimer;
   DateTime? currentBackPressTime;
+
+  Future<void> _handleForceLogoutConfirm() async {
+    if (_webViewController == null) return;
+    if (mounted) {
+      setState(() {
+        _isHandlingForceLogoutAction = true;
+      });
+    }
+    try {
+      await _webViewController!.evaluateJavascript(source: """
+        (function() {
+          try {
+            var modals = document.querySelectorAll('dxbl-modal-root, .dxbl-modal-root, dxbl-modal-dialog');
+            for (var i = 0; i < modals.length; i++) {
+              var m = modals[i];
+              var text = (m.innerText || m.textContent || '');
+              if (text.indexOf('oturumunuz sonlandırılıyor') !== -1 || text.indexOf('başka bir kullanıcı giriş') !== -1) {
+                var btns = m.querySelectorAll('button');
+                for (var b = 0; b < btns.length; b++) {
+                  btns[b].click();
+                  return true;
+                }
+              }
+            }
+          } catch (_) {}
+          return false;
+        })();
+      """);
+    } catch (_) {}
+
+    if (mounted) {
+      setState(() {
+        _showForceLogoutModal = false;
+        _isHandlingForceLogoutAction = false;
+      });
+      _triggerNativeLogout();
+    }
+  }
 
   Future<void> _handleMultipleSessionKeep() async {
     if (_webViewController == null) return;
@@ -1249,6 +1289,58 @@ class _WebViewScreenState extends State<WebViewScreen> {
                         multipleSessionObserver.observe(document.body || document.documentElement, { childList: true, subtree: true });
                         checkMultipleSessionModal();
                       }
+
+                      if (!window._forceLogoutObserverAdded) {
+                        window._forceLogoutObserverAdded = true;
+                        var _lastForceLogoutTrigger = 0;
+
+                        function checkForceLogoutModal() {
+                          var modals = document.querySelectorAll('dxbl-modal-root, .dxbl-modal-root, dxbl-modal-dialog');
+                          for (var i = 0; i < modals.length; i++) {
+                            var modal = modals[i];
+                            if (modal.getAttribute('data-native-handled') === 'true') {
+                              continue;
+                            }
+
+                            var text = (modal.innerText || modal.textContent || '');
+                            var isForceLogoutModal = (text.indexOf('başka bir kullanıcı giriş yapmış') !== -1 || 
+                                                      text.indexOf('baska bir kullanici giris yapmis') !== -1 || 
+                                                      text.indexOf('oturumunuz sonlandırılıyor') !== -1 ||
+                                                      text.indexOf('oturumunuz sonlandiriliyor') !== -1);
+
+                            if (isForceLogoutModal) {
+                              modal.setAttribute('data-native-handled', 'true');
+                              try {
+                                modal.style.setProperty('display', 'none', 'important');
+                                modal.style.setProperty('visibility', 'hidden', 'important');
+                                modal.style.setProperty('opacity', '0', 'important');
+                                modal.style.setProperty('pointer-events', 'none', 'important');
+                              } catch (_) {}
+
+                              var rootModal = modal.closest('dxbl-modal-root, .dxbl-modal-root') || modal;
+                              rootModal.setAttribute('data-native-handled', 'true');
+                              try {
+                                rootModal.style.setProperty('display', 'none', 'important');
+                                rootModal.style.setProperty('visibility', 'hidden', 'important');
+                                rootModal.style.setProperty('opacity', '0', 'important');
+                                rootModal.style.setProperty('pointer-events', 'none', 'important');
+                              } catch (_) {}
+
+                              var now = Date.now();
+                              if (now - _lastForceLogoutTrigger > 1500) {
+                                _lastForceLogoutTrigger = now;
+                                if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+                                  window.flutter_inappwebview.callHandler('onForceLogoutCardDetected');
+                                }
+                              }
+                            }
+                          }
+                        }
+
+                        var forceLogoutObserver = new MutationObserver(checkForceLogoutModal);
+                        forceLogoutObserver.observe(document.body || document.documentElement, { childList: true, subtree: true });
+                        checkForceLogoutModal();
+                      }
                     """,
                     injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
                   ),
@@ -1337,6 +1429,16 @@ class _WebViewScreenState extends State<WebViewScreen> {
                         if (mounted && !_showMultipleSessionModal && !_isLoggingOut) {
                           setState(() {
                             _showMultipleSessionModal = true;
+                          });
+                        }
+                      },
+                    );
+                    controller.addJavaScriptHandler(
+                      handlerName: 'onForceLogoutCardDetected',
+                      callback: (args) {
+                        if (mounted && !_showForceLogoutModal && !_isLoggingOut) {
+                          setState(() {
+                            _showForceLogoutModal = true;
                           });
                         }
                       },
@@ -1572,6 +1674,62 @@ class _WebViewScreenState extends State<WebViewScreen> {
                         var multipleSessionObserver = new MutationObserver(checkMultipleSessionModal);
                         multipleSessionObserver.observe(document.body || document.documentElement, { childList: true, subtree: true });
                         checkMultipleSessionModal();
+                      }
+                    """);
+                  } catch (_) {}
+
+                  try {
+                    await controller.evaluateJavascript(source: """
+                      if (!window._forceLogoutObserverAdded) {
+                        window._forceLogoutObserverAdded = true;
+                        var _lastForceLogoutTrigger = 0;
+
+                        function checkForceLogoutModal() {
+                          var modals = document.querySelectorAll('dxbl-modal-root, .dxbl-modal-root, dxbl-modal-dialog');
+                          for (var i = 0; i < modals.length; i++) {
+                            var modal = modals[i];
+                            if (modal.getAttribute('data-native-handled') === 'true') {
+                              continue;
+                            }
+
+                            var text = (modal.innerText || modal.textContent || '');
+                            var isForceLogoutModal = (text.indexOf('başka bir kullanıcı giriş yapmış') !== -1 || 
+                                                      text.indexOf('baska bir kullanici giris yapmis') !== -1 || 
+                                                      text.indexOf('oturumunuz sonlandırılıyor') !== -1 ||
+                                                      text.indexOf('oturumunuz sonlandiriliyor') !== -1);
+
+                            if (isForceLogoutModal) {
+                              modal.setAttribute('data-native-handled', 'true');
+                              try {
+                                modal.style.setProperty('display', 'none', 'important');
+                                modal.style.setProperty('visibility', 'hidden', 'important');
+                                modal.style.setProperty('opacity', '0', 'important');
+                                modal.style.setProperty('pointer-events', 'none', 'important');
+                              } catch (_) {}
+
+                              var rootModal = modal.closest('dxbl-modal-root, .dxbl-modal-root') || modal;
+                              rootModal.setAttribute('data-native-handled', 'true');
+                              try {
+                                rootModal.style.setProperty('display', 'none', 'important');
+                                rootModal.style.setProperty('visibility', 'hidden', 'important');
+                                rootModal.style.setProperty('opacity', '0', 'important');
+                                rootModal.style.setProperty('pointer-events', 'none', 'important');
+                              } catch (_) {}
+
+                              var now = Date.now();
+                              if (now - _lastForceLogoutTrigger > 1500) {
+                                _lastForceLogoutTrigger = now;
+                                if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+                                  window.flutter_inappwebview.callHandler('onForceLogoutCardDetected');
+                                }
+                              }
+                            }
+                          }
+                        }
+
+                        var forceLogoutObserver = new MutationObserver(checkForceLogoutModal);
+                        forceLogoutObserver.observe(document.body || document.documentElement, { childList: true, subtree: true });
+                        checkForceLogoutModal();
                       }
                     """);
                   } catch (_) {}
@@ -2421,6 +2579,136 @@ class _WebViewScreenState extends State<WebViewScreen> {
                               icon: const Icon(Icons.logout_rounded, size: 20),
                               label: const Text(
                                 'Hayır (Oturumu Kapat)',
+                                style: TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.bold,
+                                  fontFamily: 'Nunito Sans',
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+
+              if (_showForceLogoutModal)
+                Container(
+                  color: Colors.black.withValues(alpha: 0.55),
+                  child: Center(
+                    child: Container(
+                      margin: const EdgeInsets.symmetric(horizontal: 24),
+                      padding: const EdgeInsets.all(24),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(24),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.15),
+                            blurRadius: 25,
+                            offset: const Offset(0, 10),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Stack(
+                            clipBehavior: Clip.none,
+                            children: [
+                              Container(
+                                width: 72,
+                                height: 72,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFFEF2F2),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: const Color(0xFFFEE2E2), width: 2),
+                                ),
+                                child: const Icon(
+                                  Icons.no_accounts_rounded,
+                                  color: Color(0xFFEF4444),
+                                  size: 36,
+                                ),
+                              ),
+                              Positioned(
+                                right: -2,
+                                top: -2,
+                                child: Container(
+                                  width: 24,
+                                  height: 24,
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFEF4444),
+                                    shape: BoxShape.circle,
+                                    border: Border.all(color: Colors.white, width: 2),
+                                  ),
+                                  child: const Center(
+                                    child: Icon(
+                                      Icons.priority_high_rounded,
+                                      color: Colors.white,
+                                      size: 14,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 20),
+                          const Text(
+                            'Oturumunuz Sonlandırıldı',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w800,
+                              fontFamily: 'Nunito Sans',
+                              color: Color(0xFF0F172A),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFFEF2F2),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: const Color(0xFFFCA5A5)),
+                            ),
+                            child: const Text(
+                              'Bilgileriniz ile başka bir kullanıcı giriş yapmış durumda, oturumunuz sonlandırılıyor.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                fontFamily: 'Nunito Sans',
+                                color: Color(0xFF991B1B),
+                                height: 1.4,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 24),
+                          SizedBox(
+                            width: double.infinity,
+                            height: 50,
+                            child: FilledButton.icon(
+                              onPressed: _isHandlingForceLogoutAction ? null : _handleForceLogoutConfirm,
+                              style: FilledButton.styleFrom(
+                                backgroundColor: const Color(0xFFEF4444),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                elevation: 0,
+                              ),
+                              icon: _isHandlingForceLogoutAction
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                        color: Colors.white,
+                                        strokeWidth: 2.5,
+                                      ),
+                                    )
+                                  : const Icon(Icons.login_rounded, size: 20),
+                              label: const Text(
+                                'Tamam (Yeniden Giriş Yap)',
                                 style: TextStyle(
                                   fontSize: 15,
                                   fontWeight: FontWeight.bold,

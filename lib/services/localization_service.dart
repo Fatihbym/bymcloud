@@ -138,6 +138,11 @@ class LocalizationService extends ChangeNotifier {
       'multiple_session_yes_btn': 'Evet (Oturumu Sürdür)',
       'multiple_session_no_btn': 'Hayır (Oturumu Kapat)',
 
+      // Force Logout / Session Terminated Warning
+      'force_logout_title': 'Oturumunuz Sonlandırıldı',
+      'force_logout_desc': 'Bilgileriniz ile başka bir kullanıcı giriş yapmış durumda, oturumunuz sonlandırılıyor.',
+      'force_logout_btn': 'Tamam (Yeniden Giriş Yap)',
+
       // Login Info & Devices Logs
       'login_info_title': 'Geçmiş Giriş Kayıtları',
       'login_info_subtitle': 'Son hesap erişim ve cihaz bilgileriniz',
@@ -239,6 +244,11 @@ class LocalizationService extends ChangeNotifier {
       'multiple_session_bullet_no': 'No: Terminate current session (new session will continue)',
       'multiple_session_yes_btn': 'Yes (Maintain Session)',
       'multiple_session_no_btn': 'No (Logout)',
+
+      // Force Logout / Session Terminated Warning
+      'force_logout_title': 'Session Terminated',
+      'force_logout_desc': 'Another user logged in with your credentials, your session is being terminated.',
+      'force_logout_btn': 'OK (Login Again)',
 
       // Login Info & Devices Logs
       'login_info_title': 'Login History',
