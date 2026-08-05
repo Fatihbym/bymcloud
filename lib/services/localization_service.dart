@@ -141,7 +141,7 @@ class LocalizationService extends ChangeNotifier {
       // Force Logout / Session Terminated Warning
       'force_logout_title': 'Oturumunuz Sonlandırıldı',
       'force_logout_desc': 'Bilgileriniz ile başka bir kullanıcı giriş yapmış durumda, oturumunuz sonlandırılıyor.',
-      'force_logout_btn': 'Tamam (Yeniden Giriş Yap)',
+      'force_logout_btn': 'Tamam',
 
       // Login Info & Devices Logs
       'login_info_title': 'Geçmiş Giriş Kayıtları',

@@ -17,6 +17,7 @@ import 'screens/company_selection_screen.dart';
 import 'widgets/login_info_bottom_sheet.dart';
 import 'widgets/theme_selection_bottom_sheet.dart';
 import 'widgets/menu_view_selection_bottom_sheet.dart';
+import 'services/localization_service.dart';
 
 class WebViewScreen extends StatefulWidget {
   final DeepLinkService deepLinkService;
@@ -2082,9 +2083,9 @@ class _WebViewScreenState extends State<WebViewScreen> {
                           strokeWidth: 3.5,
                         ),
                         const SizedBox(height: 20),
-                        const Text(
-                          'Yükleniyor...',
-                          style: TextStyle(
+                        Text(
+                          LocalizationService().translate('loading'),
+                          style: const TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w600,
                             fontFamily: 'Nunito Sans',
