@@ -43,9 +43,132 @@ class _WebViewScreenState extends State<WebViewScreen> {
   bool _isShowingLoginInfoSheet = false;
   bool _isShowingThemeSheet = false;
   bool _isShowingMenuViewSheet = false;
-  
+  bool _showBlazorReconnectModal = false;
+  bool _isBlazorReconnecting = false;
+  bool _showMultipleSessionModal = false;
+  bool _isHandlingMultipleSessionAction = false;
+
   Timer? _loadingTimeoutTimer;
   DateTime? currentBackPressTime;
+
+  Future<void> _handleMultipleSessionKeep() async {
+    if (_webViewController == null) return;
+    if (mounted) {
+      setState(() {
+        _isHandlingMultipleSessionAction = true;
+      });
+    }
+    try {
+      await _webViewController!.evaluateJavascript(source: """
+        (function() {
+          try {
+            var modals = document.querySelectorAll('dxbl-modal-root, .dxbl-modal-root, dxbl-modal-dialog');
+            for (var i = 0; i < modals.length; i++) {
+              var m = modals[i];
+              var text = (m.innerText || m.textContent || '');
+              if (text.indexOf('Çoklu Oturum Uyarısı') !== -1 || text.indexOf('başka bir cihazda oturum açıldı') !== -1) {
+                var btns = m.querySelectorAll('button');
+                for (var b = 0; b < btns.length; b++) {
+                  var bText = (btns[b].innerText || btns[b].textContent || '').trim();
+                  if (bText === 'Evet' || bText.indexOf('Evet') !== -1) {
+                    btns[b].click();
+                    return true;
+                  }
+                }
+              }
+            }
+          } catch (_) {}
+          return false;
+        })();
+      """);
+    } catch (_) {}
+
+    if (mounted) {
+      setState(() {
+        _showMultipleSessionModal = false;
+        _isHandlingMultipleSessionAction = false;
+      });
+    }
+  }
+
+  Future<void> _handleMultipleSessionLogout() async {
+    if (_webViewController == null) return;
+    if (mounted) {
+      setState(() {
+        _isHandlingMultipleSessionAction = true;
+      });
+    }
+    try {
+      await _webViewController!.evaluateJavascript(source: """
+        (function() {
+          try {
+            var modals = document.querySelectorAll('dxbl-modal-root, .dxbl-modal-root, dxbl-modal-dialog');
+            for (var i = 0; i < modals.length; i++) {
+              var m = modals[i];
+              var text = (m.innerText || m.textContent || '');
+              if (text.indexOf('Çoklu Oturum Uyarısı') !== -1 || text.indexOf('başka bir cihazda oturum açıldı') !== -1) {
+                var btns = m.querySelectorAll('button');
+                for (var b = 0; b < btns.length; b++) {
+                  var bText = (btns[b].innerText || btns[b].textContent || '').trim();
+                  if (bText === 'Hayır' || bText.indexOf('Hayır') !== -1) {
+                    btns[b].click();
+                    return true;
+                  }
+                }
+              }
+            }
+          } catch (_) {}
+          return false;
+        })();
+      """);
+    } catch (_) {}
+
+    if (mounted) {
+      setState(() {
+        _showMultipleSessionModal = false;
+        _isHandlingMultipleSessionAction = false;
+      });
+      _triggerNativeLogout();
+    }
+  }
+
+  Future<void> _handleBlazorReconnect() async {
+    if (_webViewController == null) return;
+    if (mounted) {
+      setState(() {
+        _isBlazorReconnecting = true;
+      });
+    }
+    try {
+      await _webViewController!.evaluateJavascript(source: """
+        (function() {
+          try {
+            var modal = document.getElementById('components-reconnect-modal');
+            var btn = modal ? modal.querySelector('button, a') : null;
+            if (btn && getComputedStyle(btn).display !== 'none') {
+              btn.click();
+            } else if (window.Blazor && window.Blazor.reconnect) {
+              window.Blazor.reconnect();
+            } else {
+              location.reload();
+            }
+          } catch(e) {
+            location.reload();
+          }
+        })();
+      """);
+    } catch (_) {
+      _webViewController?.reload();
+    }
+
+    Future.delayed(const Duration(seconds: 4), () {
+      if (mounted && _isBlazorReconnecting) {
+        setState(() {
+          _isBlazorReconnecting = false;
+        });
+      }
+    });
+  }
 
   Future<void> _openMenuViewSelectionBottomSheet() async {
     if (_isShowingMenuViewSheet || !mounted) return;
@@ -999,6 +1122,133 @@ class _WebViewScreenState extends State<WebViewScreen> {
                           }
                         }, true);
                       }
+
+                      if (!window._blazorReconnectObserverAdded) {
+                        window._blazorReconnectObserverAdded = true;
+                        var _lastBlazorReconnectState = false;
+
+                        if (!document.getElementById('_nativeBlazorReconnectStyle')) {
+                          var styleNode = document.createElement('style');
+                          styleNode.id = '_nativeBlazorReconnectStyle';
+                          styleNode.innerHTML = '#components-reconnect-modal { display: none !important; visibility: hidden !important; opacity: 0 !important; pointer-events: none !important; position: fixed !important; top: -9999px !important; left: -9999px !important; width: 0 !important; height: 0 !important; z-index: -9999 !important; }';
+                          (document.head || document.documentElement).appendChild(styleNode);
+                        }
+
+                        function evaluateBlazorReconnectState() {
+                          var modal = document.getElementById('components-reconnect-modal');
+                          if (!modal) {
+                            if (_lastBlazorReconnectState) {
+                              _lastBlazorReconnectState = false;
+                              if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+                                window.flutter_inappwebview.callHandler('onBlazorReconnectStateChanged', false);
+                              }
+                            }
+                            return;
+                          }
+
+                          var classList = modal.classList;
+                          var hasShowClass = classList.contains('components-reconnect-show') ||
+                                             classList.contains('components-reconnect-failed') ||
+                                             classList.contains('components-reconnect-rejected');
+
+                          var rawStyle = (modal.getAttribute('style') || '').toLowerCase();
+                          var hasDisplayNone = rawStyle.indexOf('display: none') !== -1 || rawStyle.indexOf('display:none') !== -1;
+                          var inlineShow = rawStyle.indexOf('display: block') !== -1 || 
+                                           rawStyle.indexOf('display: flex') !== -1 || 
+                                           rawStyle.indexOf('display: inline') !== -1 || 
+                                           (rawStyle.indexOf('visibility: visible') !== -1 && !hasDisplayNone) ||
+                                           (!hasDisplayNone && rawStyle.length > 5);
+
+                          var innerBtn = modal.querySelector('button');
+                          var innerP = modal.querySelector('p');
+                          var btnStyle = innerBtn ? (innerBtn.getAttribute('style') || '').toLowerCase() : '';
+                          var pStyle = innerP ? (innerP.getAttribute('style') || '').toLowerCase() : '';
+
+                          var innerActive = (btnStyle.length > 0 && btnStyle.indexOf('display: none') === -1 && btnStyle.indexOf('display:none') === -1) ||
+                                            (pStyle.length > 0 && pStyle.indexOf('display: none') === -1 && pStyle.indexOf('display:none') === -1);
+
+                          var innerText = (modal.innerText || modal.textContent || '').toLowerCase();
+                          var textActive = innerText.indexOf('bağlanmaya çalışıyor') !== -1 || 
+                                           innerText.indexOf('yeniden bağlan') !== -1 || 
+                                           innerText.indexOf('bağlantı koptu') !== -1 ||
+                                           innerText.indexOf('reconnect') !== -1;
+
+                          var isReconnecting = hasShowClass || inlineShow || innerActive || (textActive && !hasDisplayNone);
+
+                          if (isReconnecting !== _lastBlazorReconnectState) {
+                            _lastBlazorReconnectState = isReconnecting;
+                            if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+                              window.flutter_inappwebview.callHandler('onBlazorReconnectStateChanged', isReconnecting);
+                            }
+                          }
+                        }
+
+                        var blazorObserver = new MutationObserver(function() {
+                          evaluateBlazorReconnectState();
+                        });
+
+                        blazorObserver.observe(document.body || document.documentElement, {
+                          childList: true,
+                          subtree: true,
+                          attributes: true,
+                          attributeFilter: ['style', 'class'],
+                          characterData: true
+                        });
+
+                        evaluateBlazorReconnectState();
+                      }
+
+                      if (!window._multipleSessionObserverAdded) {
+                        window._multipleSessionObserverAdded = true;
+                        var _lastMultipleSessionTrigger = 0;
+
+                        function checkMultipleSessionModal() {
+                          var modals = document.querySelectorAll('dxbl-modal-root, .dxbl-modal-root, dxbl-modal-dialog');
+                          for (var i = 0; i < modals.length; i++) {
+                            var modal = modals[i];
+                            if (modal.getAttribute('data-native-handled') === 'true') {
+                              continue;
+                            }
+
+                            var text = (modal.innerText || modal.textContent || '');
+                            var isMultipleSessionModal = text.indexOf('Çoklu Oturum Uyarısı') !== -1 || 
+                                                         text.indexOf('Coklu Oturum Uyarisi') !== -1 || 
+                                                         text.indexOf('başka bir cihazda oturum açıldı') !== -1 ||
+                                                         text.indexOf('baska bir cihazda oturum acildi') !== -1;
+
+                            if (isMultipleSessionModal) {
+                              modal.setAttribute('data-native-handled', 'true');
+                              try {
+                                modal.style.setProperty('display', 'none', 'important');
+                                modal.style.setProperty('visibility', 'hidden', 'important');
+                                modal.style.setProperty('opacity', '0', 'important');
+                                modal.style.setProperty('pointer-events', 'none', 'important');
+                              } catch (_) {}
+
+                              var rootModal = modal.closest('dxbl-modal-root, .dxbl-modal-root') || modal;
+                              rootModal.setAttribute('data-native-handled', 'true');
+                              try {
+                                rootModal.style.setProperty('display', 'none', 'important');
+                                rootModal.style.setProperty('visibility', 'hidden', 'important');
+                                rootModal.style.setProperty('opacity', '0', 'important');
+                                rootModal.style.setProperty('pointer-events', 'none', 'important');
+                              } catch (_) {}
+
+                              var now = Date.now();
+                              if (now - _lastMultipleSessionTrigger > 1500) {
+                                _lastMultipleSessionTrigger = now;
+                                if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+                                  window.flutter_inappwebview.callHandler('onMultipleSessionCardDetected');
+                                }
+                              }
+                            }
+                          }
+                        }
+
+                        var multipleSessionObserver = new MutationObserver(checkMultipleSessionModal);
+                        multipleSessionObserver.observe(document.body || document.documentElement, { childList: true, subtree: true });
+                        checkMultipleSessionModal();
+                      }
                     """,
                     injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
                   ),
@@ -1061,6 +1311,32 @@ class _WebViewScreenState extends State<WebViewScreen> {
                         if (mounted && !_showSessionExpiredModal && !_isLoggingOut) {
                           setState(() {
                             _showSessionExpiredModal = true;
+                          });
+                        }
+                      },
+                    );
+                    controller.addJavaScriptHandler(
+                      handlerName: 'onBlazorReconnectStateChanged',
+                      callback: (args) {
+                        if (args.isNotEmpty && args[0] is bool) {
+                          final bool isReconnecting = args[0] as bool;
+                          if (mounted && _showBlazorReconnectModal != isReconnecting && !_isLoggingOut) {
+                            setState(() {
+                              _showBlazorReconnectModal = isReconnecting;
+                              if (!isReconnecting) {
+                                _isBlazorReconnecting = false;
+                              }
+                            });
+                          }
+                        }
+                      },
+                    );
+                    controller.addJavaScriptHandler(
+                      handlerName: 'onMultipleSessionCardDetected',
+                      callback: (args) {
+                        if (mounted && !_showMultipleSessionModal && !_isLoggingOut) {
+                          setState(() {
+                            _showMultipleSessionModal = true;
                           });
                         }
                       },
@@ -1153,14 +1429,149 @@ class _WebViewScreenState extends State<WebViewScreen> {
                   _cancelLoadingTimeoutTimer();
                   await _applyThemeToWebView();
 
-                  // Sadece web tarafının kendi siyah loader'ını gizler
+                  // Sadece web tarafının kendi siyah loader'ını ve Blazor reconnect modal'ını gizler
                   try {
                     await controller.evaluateJavascript(source: """
                       if (!window._pageLoaderStyleAdded) {
                         window._pageLoaderStyleAdded = true;
                         var style = document.createElement('style');
-                        style.innerHTML = '.app-page-loader, .user-sub-menu, .user-sub-menu.open { display: none !important; visibility: hidden !important; opacity: 0 !important; pointer-events: none !important; }';
+                        style.innerHTML = '.app-page-loader, .user-sub-menu, .user-sub-menu.open, #components-reconnect-modal { display: none !important; visibility: hidden !important; opacity: 0 !important; pointer-events: none !important; }';
                         (document.head || document.documentElement).appendChild(style);
+                      }
+                    """);
+                  } catch (_) {}
+
+                  try {
+                    await controller.evaluateJavascript(source: """
+                      if (!window._blazorReconnectObserverAdded) {
+                        window._blazorReconnectObserverAdded = true;
+                        var _lastBlazorReconnectState = false;
+
+                        if (!document.getElementById('_nativeBlazorReconnectStyle')) {
+                          var styleNode = document.createElement('style');
+                          styleNode.id = '_nativeBlazorReconnectStyle';
+                          styleNode.innerHTML = '#components-reconnect-modal { display: none !important; visibility: hidden !important; opacity: 0 !important; pointer-events: none !important; position: fixed !important; top: -9999px !important; left: -9999px !important; width: 0 !important; height: 0 !important; z-index: -9999 !important; }';
+                          (document.head || document.documentElement).appendChild(styleNode);
+                        }
+
+                        function evaluateBlazorReconnectState() {
+                          var modal = document.getElementById('components-reconnect-modal');
+                          if (!modal) {
+                            if (_lastBlazorReconnectState) {
+                              _lastBlazorReconnectState = false;
+                              if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+                                window.flutter_inappwebview.callHandler('onBlazorReconnectStateChanged', false);
+                              }
+                            }
+                            return;
+                          }
+
+                          var classList = modal.classList;
+                          var hasShowClass = classList.contains('components-reconnect-show') ||
+                                             classList.contains('components-reconnect-failed') ||
+                                             classList.contains('components-reconnect-rejected');
+
+                          var rawStyle = (modal.getAttribute('style') || '').toLowerCase();
+                          var hasDisplayNone = rawStyle.indexOf('display: none') !== -1 || rawStyle.indexOf('display:none') !== -1;
+                          var inlineShow = rawStyle.indexOf('display: block') !== -1 || 
+                                           rawStyle.indexOf('display: flex') !== -1 || 
+                                           rawStyle.indexOf('display: inline') !== -1 || 
+                                           (rawStyle.indexOf('visibility: visible') !== -1 && !hasDisplayNone) ||
+                                           (!hasDisplayNone && rawStyle.length > 5);
+
+                          var innerBtn = modal.querySelector('button');
+                          var innerP = modal.querySelector('p');
+                          var btnStyle = innerBtn ? (innerBtn.getAttribute('style') || '').toLowerCase() : '';
+                          var pStyle = innerP ? (innerP.getAttribute('style') || '').toLowerCase() : '';
+
+                          var innerActive = (btnStyle.length > 0 && btnStyle.indexOf('display: none') === -1 && btnStyle.indexOf('display:none') === -1) ||
+                                            (pStyle.length > 0 && pStyle.indexOf('display: none') === -1 && pStyle.indexOf('display:none') === -1);
+
+                          var innerText = (modal.innerText || modal.textContent || '').toLowerCase();
+                          var textActive = innerText.indexOf('bağlanmaya çalışıyor') !== -1 || 
+                                           innerText.indexOf('yeniden bağlan') !== -1 || 
+                                           innerText.indexOf('bağlantı koptu') !== -1 ||
+                                           innerText.indexOf('reconnect') !== -1;
+
+                          var isReconnecting = hasShowClass || inlineShow || innerActive || (textActive && !hasDisplayNone);
+
+                          if (isReconnecting !== _lastBlazorReconnectState) {
+                            _lastBlazorReconnectState = isReconnecting;
+                            if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+                              window.flutter_inappwebview.callHandler('onBlazorReconnectStateChanged', isReconnecting);
+                            }
+                          }
+                        }
+
+                        var blazorObserver = new MutationObserver(function() {
+                          evaluateBlazorReconnectState();
+                        });
+
+                        blazorObserver.observe(document.body || document.documentElement, {
+                          childList: true,
+                          subtree: true,
+                          attributes: true,
+                          attributeFilter: ['style', 'class'],
+                          characterData: true
+                        });
+
+                        evaluateBlazorReconnectState();
+                      }
+                    """);
+                  } catch (_) {}
+
+                  try {
+                    await controller.evaluateJavascript(source: """
+                      if (!window._multipleSessionObserverAdded) {
+                        window._multipleSessionObserverAdded = true;
+                        var _lastMultipleSessionTrigger = 0;
+
+                        function checkMultipleSessionModal() {
+                          var modals = document.querySelectorAll('dxbl-modal-root, .dxbl-modal-root, dxbl-modal-dialog');
+                          for (var i = 0; i < modals.length; i++) {
+                            var modal = modals[i];
+                            if (modal.getAttribute('data-native-handled') === 'true') {
+                              continue;
+                            }
+
+                            var text = (modal.innerText || modal.textContent || '');
+                            var isMultipleSessionModal = text.indexOf('Çoklu Oturum Uyarısı') !== -1 || 
+                                                         text.indexOf('Coklu Oturum Uyarisi') !== -1 || 
+                                                         text.indexOf('başka bir cihazda oturum açıldı') !== -1 ||
+                                                         text.indexOf('baska bir cihazda oturum acildi') !== -1;
+
+                            if (isMultipleSessionModal) {
+                              modal.setAttribute('data-native-handled', 'true');
+                              try {
+                                modal.style.setProperty('display', 'none', 'important');
+                                modal.style.setProperty('visibility', 'hidden', 'important');
+                                modal.style.setProperty('opacity', '0', 'important');
+                                modal.style.setProperty('pointer-events', 'none', 'important');
+                              } catch (_) {}
+
+                              var rootModal = modal.closest('dxbl-modal-root, .dxbl-modal-root') || modal;
+                              rootModal.setAttribute('data-native-handled', 'true');
+                              try {
+                                rootModal.style.setProperty('display', 'none', 'important');
+                                rootModal.style.setProperty('visibility', 'hidden', 'important');
+                                rootModal.style.setProperty('opacity', '0', 'important');
+                                rootModal.style.setProperty('pointer-events', 'none', 'important');
+                              } catch (_) {}
+
+                              var now = Date.now();
+                              if (now - _lastMultipleSessionTrigger > 1500) {
+                                _lastMultipleSessionTrigger = now;
+                                if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+                                  window.flutter_inappwebview.callHandler('onMultipleSessionCardDetected');
+                                }
+                              }
+                            }
+                          }
+                        }
+
+                        var multipleSessionObserver = new MutationObserver(checkMultipleSessionModal);
+                        multipleSessionObserver.observe(document.body || document.documentElement, { childList: true, subtree: true });
+                        checkMultipleSessionModal();
                       }
                     """);
                   } catch (_) {}
@@ -1688,6 +2099,333 @@ class _WebViewScreenState extends State<WebViewScreen> {
                                     ),
                                   ),
                                 ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+
+              if (_showBlazorReconnectModal)
+                Container(
+                  color: Colors.black.withValues(alpha: 0.55),
+                  child: Center(
+                    child: Container(
+                      margin: const EdgeInsets.symmetric(horizontal: 24),
+                      padding: const EdgeInsets.all(24),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(24),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.15),
+                            blurRadius: 25,
+                            offset: const Offset(0, 10),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Stack(
+                            clipBehavior: Clip.none,
+                            children: [
+                              Container(
+                                width: 72,
+                                height: 72,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFEFF6FF),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: const Color(0xFFDBEAFE), width: 2),
+                                ),
+                                child: const Center(
+                                  child: SizedBox(
+                                    width: 34,
+                                    height: 34,
+                                    child: CircularProgressIndicator(
+                                      color: Color(0xFF0075FF),
+                                      strokeWidth: 3,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              Positioned(
+                                right: -2,
+                                top: -2,
+                                child: Container(
+                                  width: 24,
+                                  height: 24,
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF0075FF),
+                                    shape: BoxShape.circle,
+                                    border: Border.all(color: Colors.white, width: 2),
+                                  ),
+                                  child: const Icon(
+                                    Icons.cloud_sync_rounded,
+                                    color: Colors.white,
+                                    size: 13,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 20),
+                          const Text(
+                            'Yeniden Bağlanılıyor',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w800,
+                              fontFamily: 'Nunito Sans',
+                              color: Color(0xFF0F172A),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          const Text(
+                            'Bulut sunucusu ile bağlantı kesildi.\nSisteme yeniden bağlanmaya çalışıyor, lütfen bekleyiniz...',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
+                              fontFamily: 'Nunito Sans',
+                              color: Color(0xFF64748B),
+                              height: 1.4,
+                            ),
+                          ),
+                          const SizedBox(height: 24),
+                          SizedBox(
+                            width: double.infinity,
+                            height: 50,
+                            child: FilledButton.icon(
+                              onPressed: _isBlazorReconnecting ? null : _handleBlazorReconnect,
+                              style: FilledButton.styleFrom(
+                                backgroundColor: const Color(0xFF0075FF),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                elevation: 0,
+                              ),
+                              icon: _isBlazorReconnecting
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                        color: Colors.white,
+                                        strokeWidth: 2.5,
+                                      ),
+                                    )
+                                  : const Icon(Icons.refresh_rounded, size: 20),
+                              label: Text(
+                                _isBlazorReconnecting ? 'Bağlanılıyor...' : 'Yeniden Bağlan',
+                                style: const TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.bold,
+                                  fontFamily: 'Nunito Sans',
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          SizedBox(
+                            width: double.infinity,
+                            height: 50,
+                            child: OutlinedButton.icon(
+                              onPressed: () {
+                                setState(() {
+                                  _showBlazorReconnectModal = false;
+                                });
+                                _reloadPage();
+                              },
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: const Color(0xFF64748B),
+                                side: const BorderSide(color: Color(0xFFE2E8F0), width: 1.5),
+                                backgroundColor: const Color(0xFFF8FAFC),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                              ),
+                              icon: const Icon(Icons.sync_rounded, size: 20),
+                              label: const Text(
+                                'Sayfayı Yenile',
+                                style: TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.bold,
+                                  fontFamily: 'Nunito Sans',
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+
+              if (_showMultipleSessionModal)
+                Container(
+                  color: Colors.black.withValues(alpha: 0.55),
+                  child: Center(
+                    child: Container(
+                      margin: const EdgeInsets.symmetric(horizontal: 24),
+                      padding: const EdgeInsets.all(24),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(24),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.15),
+                            blurRadius: 25,
+                            offset: const Offset(0, 10),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Stack(
+                            clipBehavior: Clip.none,
+                            children: [
+                              Container(
+                                width: 72,
+                                height: 72,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFFFF7ED),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: const Color(0xFFFFEDD5), width: 2),
+                                ),
+                                child: const Icon(
+                                  Icons.devices_other_rounded,
+                                  color: Color(0xFFF97316),
+                                  size: 36,
+                                ),
+                              ),
+                              Positioned(
+                                right: -2,
+                                top: -2,
+                                child: Container(
+                                  width: 24,
+                                  height: 24,
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFF97316),
+                                    shape: BoxShape.circle,
+                                    border: Border.all(color: Colors.white, width: 2),
+                                  ),
+                                  child: const Center(
+                                    child: Text(
+                                      '!',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 20),
+                          const Text(
+                            'Çoklu Oturum Uyarısı',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w800,
+                              fontFamily: 'Nunito Sans',
+                              color: Color(0xFF0F172A),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Container(
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF8FAFC),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: const Color(0xFFE2E8F0)),
+                            ),
+                            child: const Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Bilgileriniz ile başka bir cihazda oturum açıldı.',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w700,
+                                    fontFamily: 'Nunito Sans',
+                                    color: Color(0xFF334155),
+                                  ),
+                                ),
+                                SizedBox(height: 10),
+                                Text(
+                                  '• Evet: Mevcut oturumunuzu sürdürün (yeni oturum kapatılır)\n• Hayır: Oturumunuzu kapatın (yeni oturum devam eder)',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w500,
+                                    fontFamily: 'Nunito Sans',
+                                    color: Color(0xFF64748B),
+                                    height: 1.4,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 24),
+                          SizedBox(
+                            width: double.infinity,
+                            height: 50,
+                            child: FilledButton.icon(
+                              onPressed: _isHandlingMultipleSessionAction ? null : _handleMultipleSessionKeep,
+                              style: FilledButton.styleFrom(
+                                backgroundColor: const Color(0xFF0075FF),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                elevation: 0,
+                              ),
+                              icon: _isHandlingMultipleSessionAction
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                        color: Colors.white,
+                                        strokeWidth: 2.5,
+                                      ),
+                                    )
+                                  : const Icon(Icons.check_circle_outline_rounded, size: 20),
+                              label: const Text(
+                                'Evet (Oturumu Sürdür)',
+                                style: TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.bold,
+                                  fontFamily: 'Nunito Sans',
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          SizedBox(
+                            width: double.infinity,
+                            height: 50,
+                            child: OutlinedButton.icon(
+                              onPressed: _isHandlingMultipleSessionAction ? null : _handleMultipleSessionLogout,
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: const Color(0xFFEF4444),
+                                side: const BorderSide(color: Color(0xFFFCA5A5), width: 1.5),
+                                backgroundColor: const Color(0xFFFEF2F2),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                              ),
+                              icon: const Icon(Icons.logout_rounded, size: 20),
+                              label: const Text(
+                                'Hayır (Oturumu Kapat)',
+                                style: TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.bold,
+                                  fontFamily: 'Nunito Sans',
+                                ),
                               ),
                             ),
                           ),
